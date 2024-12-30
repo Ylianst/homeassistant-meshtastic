@@ -598,6 +598,10 @@ class MeshInterface:
         await asyncio.sleep(10)
         force_reconnect = force
         while self.is_running:
+            if reconnect_counter < reconnect_counter_max:
+                reconnect_counter += 1
+            reconnect_delay = float(random.randint(2**reconnect_counter, 2 ** (reconnect_counter + 1)))  # noqa: S311
+
             try:
                 if self._reconnect_lock.locked():
                     # other reconnect in progress, wait and return here (we don't want to queue multiple reconnect at
@@ -612,7 +616,11 @@ class MeshInterface:
                     try:
                         await asyncio.wait_for(self._connection.reconnect(force=force_reconnect), timeout=30)
                     except TimeoutError:
-                        self._logger.debug("Reconnect connection did timeout, retrying")
+                        self._logger.debug(
+                            "Reconnect connection did timeout, retrying in %.0f seconds", reconnect_delay
+                        )
+                        await asyncio.sleep(reconnect_delay)
+
                         continue
                     else:
                         self._logger.debug("Reconnect connection succeeded, requesting config")
@@ -623,8 +631,12 @@ class MeshInterface:
                             self._logger.debug("Completed first request config as part of reconnect")
                             self._connected_node_ready.set()
                     except TimeoutError:
-                        self._logger.debug("Reconnect requesting config did timeout, forcing next reconnect")
+                        self._logger.debug(
+                            "Reconnect requesting config did timeout, forcing next reconnect in %.0f seconds",
+                            reconnect_delay,
+                        )
                         force_reconnect = True
+                        await asyncio.sleep(reconnect_delay)
                         continue
                     else:
                         force_reconnect = False
@@ -636,7 +648,6 @@ class MeshInterface:
                 self._logger.debug("Reconnecting cancelled", exc_info=True)
                 break
             except:  # noqa: E722
-                reconnect_delay = float(random.randint(5, 30))  # noqa: S311
                 self._logger.debug("Reconnecting failed, retrying in %.0f seconds", reconnect_delay)
                 await asyncio.sleep(reconnect_delay)
 
