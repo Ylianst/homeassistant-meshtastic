@@ -5,7 +5,7 @@ import enum
 import functools
 import itertools
 import random
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,6 +154,7 @@ class MeshInterface:
         self._app_listeners: dict[portnums_pb2.PortNum, list[Callable[[MeshNode, Packet], Awaitable[None]]]] = (
             defaultdict(list)
         )
+        self._previous_reconnects = deque(maxlen=10)
 
     def add_packet_app_listener(
         self,
@@ -594,9 +595,19 @@ class MeshInterface:
                 except Exception:  # noqa: BLE001
                     await self._reconnect_while_running()
 
-    async def _reconnect_while_running(self, *, force: bool = False) -> None:
-        await asyncio.sleep(10)
+    async def _reconnect_while_running(self, *, force: bool = False) -> None:  # noqa: PLR0915
         force_reconnect = force
+        reconnect_counter_max = 6
+        reconnect_counter = -1
+        now = datetime.datetime.now(tz=datetime.UTC)
+        self._previous_reconnects.append(now)
+        recent_reconnects = [t for t in self._previous_reconnects if (now - t) <= datetime.timedelta(seconds=30)]
+        if len(recent_reconnects) >= reconnect_counter_max:
+            backoff = float(random.randint(30, 60))  # noqa: S311
+            self._logger.debug("Too many reconnects in last 30 seconds, waiting %.0f seconds", backoff)
+            await asyncio.sleep(backoff)
+            force_reconnect = True
+
         while self.is_running:
             if reconnect_counter < reconnect_counter_max:
                 reconnect_counter += 1
